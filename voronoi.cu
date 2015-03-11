@@ -34,6 +34,37 @@ void Voronoi::compute_naive() {
 	naive_voronoi_kernel<<<grid, threadBlock>>>(d_voronoi);
 
 	cudaMemcpy(voronoi, d_voronoi, sizeof(int *)*N*N*N, cudaMemcpyDeviceToHost);
+
+	printf("Back to CPU\n");
+
+	int lastval = -1;
+	for(int z = 0; z < N; z++) {
+		for(int y = 0; y < N; y++) {
+			for(int x = 0; x < N; x++) {
+				
+				int val = voronoi[x + y*N + z*N*N];
+				printf(" %d ", val);
+				int nextval = voronoi[x + y*N + z*N*N + 1];
+				if(lastval != -1 && (val != lastval || val != nextval)) {
+					voronoi[x + y*N + z*N*N] = 1;
+				} else {
+					voronoi[x + y*N + z*N*N] = 0;
+				}
+				lastval = val;
+			}
+			printf("\n");
+		}
+	}
+
+	printf("\n\n");
+	for(int z = 0; z < 1; z++) {
+        for(int y = 0; y < N; y++) {
+            for(int x = 0; x < N; x++) {
+				printf("%d", voronoi[x + y*N + z*N*N]);
+            }
+			printf("\n");
+        }
+    }
 }
 
 void Voronoi::compute(Technique technique) {

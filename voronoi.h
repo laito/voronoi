@@ -11,7 +11,7 @@
 #include <cuda.h>
 #include "textures.h"
 
-#define N 128
+#define N 16
 #define NUM_SEEDS 100
 
 using namespace std;

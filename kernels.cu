@@ -33,6 +33,6 @@ __global__ void naive_voronoi_kernel(int *voronoi) {
 			}
 		}
 
-		voronoi[(x + y*N + z*N*N)] = mink;
+		voronoi[(x + y*N + z*N*N)] = mink + 2;
 	}
 }
