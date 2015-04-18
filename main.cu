@@ -8,7 +8,7 @@ using namespace std;
 int main(int argc, char *arvgv[]) {
 	// Set up defaults
 	//int size = 128;
-	int size = 128;
+	int size = 512; 
 	int cube_size = 16;
 	int num_seeds = 100;
 	bool show_seeds = true;

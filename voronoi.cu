@@ -157,14 +157,13 @@ void Voronoi::compute_streaming_jfa() {
 		printf("Running kernel streams for k=%d\n", k);
 		int thread_dim = 32;
    		int block_dim = sqrt( (size*size) / (thread_dim*thread_dim));
-		printf("%d\n", block_dim); 
    		dim3 grid(block_dim, block_dim);
    		dim3 threadBlock(thread_dim, thread_dim);
 		for(int i = 0; i < size; i++) {
 			if(k == size/2) { // First Run
 				cudaMalloc(&ping[i], sizeof(int *)*size*size);
             	cudaMalloc(&pong[i], sizeof(int *)*size*size);
-				cudaStreamCreate(&streams[i]);
+				cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
 				int num_seeds = 0;
 				for(int y = 0; y < size; y++) {
 					for(int x = 0; x < size; x++) {
@@ -193,9 +192,12 @@ void Voronoi::compute_streaming_jfa() {
 		cudaStreamSynchronize(streams[z]);
 		for(int y = 0; y < size; y++) {
 			for(int x = 0; x < size; x++) {
-				voronoi[x + y*size + z*size*size] = temp[x + y*z];
+				voronoi[x + y*size + z*size*size] = temp[x + y*size];
 			}
 		}
+	}
+	//show_seeds();
+	for(int z = 0; z < size; z++) {
 		save_slice(z, variant);
 	}
 }
