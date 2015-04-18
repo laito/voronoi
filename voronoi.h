@@ -24,6 +24,7 @@ enum Technique {
 	ONEJFA,
 	JFAONE,
 	JFATWO,
+	STREAMINGJFA,
 	ALL
 };
 
@@ -36,6 +37,7 @@ class Voronoi {
 	private:
 		void compute_naive();
 		void compute_jfa(Technique);
+		void compute_streaming_jfa();
 		void init_random_seeds();
 		void allocate_memory();
 		void allocate_textures();

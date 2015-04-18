@@ -23,7 +23,8 @@ __global__ void generate_seeds(int *voronoi, int *valid_cubes, int4 *seeds, int 
 	/* Generate Seed */
 	int seed_counter = valid_cubes[id];
 	if (seed_counter > -1) {
-		voronoi[(x_i) + (y_i)*size + (z_i)*size*size] = id + 1;
+		//voronoi[(x_i) + (y_i)*size + (z_i)*size*size] = id + 1;
+		voronoi[(x_i) + (y_i)*size + (z_i)*size*size] = seed_counter;
 
 		int finalx = x_i;
 		int finaly = y_i;
@@ -114,6 +115,49 @@ __device__ void draw_cube(int *voronoi, int4* seeds, int side, int cx, int cy, i
                 		seeds[x + y*size + z*size*size].w = color;
             		}
 				}
+			}
+		}
+	}
+}
+
+__global__ void jfa_voronoi_kernel_planar(int *ping, int *pong, int k, int size, int z) {
+	int x = threadIdx.x + blockIdx.x*blockDim.x;
+	int y = threadIdx.y + blockIdx.y*blockDim.y;
+
+	int seed = ping[x + y*size];
+	if(seed < 0) {
+		return;
+	}
+
+	int values[3]; values[0] = -k; values[1] = 0; values[2] = k;
+	for(int counter = 0; counter < 9; counter++) {
+		int _x = values[counter / 3];
+		int _y = values[counter % 3];
+		int posx = x + _x;
+		int posy = y + _y;
+		if(posx >= 0 && posy >= 0 && posx < size && posy < size) {
+			int index = posx + posy*size;
+			int value = pong[index];
+			if(value <= 0) {
+				pong[index] = seed;
+			} else {
+				/* Calculate distance */
+                int4 curseed = tex1Dfetch(tex_seeds, seed - 1);
+                int cx = curseed.x - posx;
+                int cy = curseed.y - posy;
+                int cz = curseed.z - z;
+
+                int4 otherseed = tex1Dfetch(tex_seeds, value - 1);
+                int ox = otherseed.x - posx;
+                int oy = otherseed.y - posy;
+                int oz = otherseed.z - z;
+
+                float curDistance = cx*cx + cy*cy + cz*cz;
+                float otherDistance = ox*ox + oy*oy + oz*oz;
+
+                if(curDistance < otherDistance) {
+                    pong[index] = seed;
+                }
 			}
 		}
 	}
