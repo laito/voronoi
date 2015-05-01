@@ -6,17 +6,11 @@ void Voronoi::init() {
     srand(time(NULL));
 	// Allocate memory for 3D Space and Seeds
 	voronoi = (int *) malloc(sizeof(int *)*size*size*size);
-	seeds = (int4 *) malloc(sizeof(int4)*get_num_seeds());
+	// Creating a separate array for naive seeds since we have to store seeds and their consituents as seeds
+	naive_seeds = (int4 *) malloc(sizeof(int4)*size*size*size);
+	seeds = (int4 *) malloc(sizeof(int4)*num_seeds);
 	// Create N Random seeds
 	init_random_seeds();
-}
-
-int Voronoi::get_num_seeds() {
-	if(variant == NAIVE) {
-		return size*size*size;
-	} else {
-		return num_seeds;
-	}
 }
 
 void Voronoi::init_random_seeds() {
@@ -25,26 +19,26 @@ void Voronoi::init_random_seeds() {
 	num_cubes = (size / cube_size) * (size / cube_size) * (size / cube_size);
 	valid_cubes = (int *) malloc(sizeof(int *)*num_cubes);
 	memset(valid_cubes, -1, sizeof(int *)*num_cubes);
-	int current_seed = 0;
 	for(int i = 0; i < num_seeds; i++) {
 		int rand_cube_id = rand() % num_cubes;
 		while(valid_cubes[rand_cube_id] > -1) {
 			rand_cube_id = rand() % num_cubes;
 		}
-		valid_cubes[rand_cube_id] = current_seed++;
+		valid_cubes[rand_cube_id] = i+1;
 	}
 	// Run the kernel to generate seeds
 	allocate_memory();
 	int num_threads_per_block = 32;
 	int num_blocks = num_cubes / num_threads_per_block; 
-	generate_seeds<<<num_blocks, num_threads_per_block>>>(d_voronoi, d_valid_cubes, d_seeds, cube_size, size, variant);
+	generate_seeds<<<num_blocks, num_threads_per_block>>>(d_voronoi, d_valid_cubes, d_seeds, d_naive_seeds, cube_size, size, mode);
 	if(m_show_seeds) {
-		cudaMemcpy(seeds, d_seeds, sizeof(int4)*get_num_seeds(), cudaMemcpyDeviceToHost);
+		cudaMemcpy(seeds, d_seeds, sizeof(int4)*num_seeds, cudaMemcpyDeviceToHost);
+		cudaMemcpy(naive_seeds, d_naive_seeds, sizeof(int4)*size*size*size, cudaMemcpyDeviceToHost);
 	}
 }
 
 void Voronoi::color_seeds() {
-    seed_colors = (unsigned char *) malloc(sizeof(unsigned char *)*size*size*3);
+    seed_colors = (unsigned char *) malloc(sizeof(unsigned char *)*num_seeds*3);
     seed_colors[0] = 0;
     seed_colors[1] = 0;
     seed_colors[2] = 0;
@@ -69,90 +63,78 @@ void Voronoi::allocate_memory() {
     cudaMalloc(&d_voronoi, sizeof(int *)*size*size*size);
 	cudaMemset(d_voronoi, 0, sizeof(int *)*size*size*size);
     cudaMalloc(&d_valid_cubes, sizeof(int *)*num_cubes);
-    cudaMalloc((void **) &d_seeds, sizeof(int4)*get_num_seeds());
+    cudaMalloc((void **) &d_seeds, sizeof(int4)*num_seeds);
+    cudaMalloc((void **) &d_naive_seeds, sizeof(int4)*size*size*size);
+	cudaMemset(d_seeds, -1, sizeof(int4)*num_seeds);
+	cudaMemset(d_naive_seeds, -1, sizeof(int4)*size*size*size);
     cudaMemcpy(d_valid_cubes, valid_cubes, sizeof(int *)*num_cubes, cudaMemcpyHostToDevice);
 }
 
 
 void Voronoi::allocate_textures() {
-    cudaBindTexture(0, tex_seeds, d_seeds, sizeof(int)*get_num_seeds());
+    cudaBindTexture(0, tex_seeds, d_seeds, sizeof(int4)*num_seeds);
+    cudaBindTexture(0, tex_naive_seeds, d_naive_seeds, sizeof(int4)*size*size*size);
 }
 
 void Voronoi::compute_streaming_jfa() {
 	printf("Streaming JFA slice-by-slice\n");
 	cudaMemcpy(voronoi, d_voronoi, sizeof(int *)*size*size*size, cudaMemcpyDeviceToHost);
-	allocate_textures();
-	int *ping[size], *pong[size];
-	int *plane[size];
+	int *ping[size], *pong[size], *plane[size];
 	cudaStream_t streams[size];
 	for(int i = 0; i < size; i++) {
-		plane[i] = (int *)malloc(sizeof(int *)*size*size);
-		memset(plane[i], 0, sizeof(int *)*size*size);
-		// Project seeds to the given z-plane, keeping seeds closest to the plane in case of conflicts
-		/*
-		for(int z = 0; z < size; z++ ) {
-			for(int y = 0; y < size; y++) {
-				for(int x = 0; x < size; x++) {
-					int value = voronoi[x + y*size + z*size*size];
-					if(value > 0) {
-						int curvalue = plane[i][x + y*size];
-						int4 otherseed = seeds[value];
-						int ox = otherseed.x - x;
-						int oy = otherseed.x - y;
-						int oz = otherseed.x - i;
-						float other_distance = ox*ox + oy*oy + oz*oz;
-						if(curvalue == 0 && other_distance < size/2) {
-							plane[i][x + y*size] = value;
-						} else if(curvalue > 0) {
-							int4 curseed = seeds[curvalue];
-							int cx = curseed.x - x;
-							int cy = curseed.y - y;
-							int cz = curseed.z - z;
-							float cur_distance = cx*cx + cy*cy + cz*cz;
-							if(cur_distance > other_distance) {
-								plane[i][x + y*size] = value;
-							}
-						}
-					}
-				}
-			}
-		}
-		*/
-		// Not a good way to project seeds // 
-		
-		for(int z = 0; z < size; z++) {
-			for(int y = 0; y < size; y++) {
-				for(int x = 0; x < size; x++) {
-					int value = voronoi[x + y*size + z*size*size];
-					if(value > 0) {
-						int curvalue = plane[i][x + y*size];
-						// We found a seeed, now map it to x-y plane
-						if(curvalue == 0) {
-							plane[i][x + y*size] = value; 
-						} else {
-							// Conflict!
-							// Get the closeset seed for this x-y point
-							int4 curseed = seeds[curvalue]; 
-							int cx = curseed.x - x;
-			                int cy = curseed.y - y;
-			                int cz = curseed.z - i;
-							int4 otherseed = seeds[value];
-							int ox = otherseed.x - x;
-			                int oy = otherseed.y - y;
-			                int oz = otherseed.z - i; 
-							float cur_distance = cx*cx + cy*cy + cz*cz;
-			                float other_distance = ox*ox + oy*oy + oz*oz;
-		    	            if(cur_distance > other_distance) {
-        			            plane[i][x + y*size] = value;
-			                }
-						}
-					}
-				}
-			}
-		}
-	}
 
+// 		plane[i] = (int *) malloc(sizeof(int *)*size*size);
+//       memset(plane[i], 0, sizeof(int *)*size*size);
+		cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
+		cudaMalloc(&plane[i], sizeof(int *)*size*size);
+		int thread_dim = 8;
+		int block_dim = cbrt((float)(size*size*size) / (float)(thread_dim*thread_dim*thread_dim));
+		dim3 grid(block_dim, block_dim, block_dim);
+		dim3 threadBlock(thread_dim, thread_dim, thread_dim);
+		plane_generate_kernel<<<grid, threadBlock, 0, streams[i]>>>(d_voronoi, plane[i], i, size);
+
+		/* Serial Implementation for the same */
+		/*
+		for(int z = 0; z < size; z++) {
+            for(int y = 0; y < size; y++) {
+                for(int x = 0; x < size; x++) {
+                    int value = voronoi[x + y*size + z*size*size];
+                    if(value > 0) {
+                        int curvalue = plane[i][x + y*size];
+                        // We found a seeed, now map it to x-y plane
+                        if(curvalue == 0) {
+                            plane[i][x + y*size] = value;
+                        } else {
+                            // Conflict!
+                            // Get the closeset seed for this x-y point
+                            int4 curseed = seeds[curvalue - 1];
+                            int cx = curseed.x - x;
+                            int cy = curseed.y - y;
+                            int cz = curseed.z - i;
+                            int4 otherseed = seeds[value - 1];
+                            int ox = otherseed.x - x;
+                            int oy = otherseed.y - y;
+                            int oz = otherseed.z - i;
+                            float cur_distance = cx*cx + cy*cy + cz*cz;
+                            float other_distance = ox*ox + oy*oy + oz*oz;
+                            if(cur_distance > other_distance) {
+                                plane[i][x + y*size] = value;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+		*/
+	}
+	cudaDeviceSynchronize();
 	// Run JFA on these planes
+	/* Perform ONE JFA */
+	int thread_dim = 32;
+    int block_dim = sqrt( (size*size) / (thread_dim*thread_dim));
+    dim3 grid(block_dim, block_dim);
+    dim3 threadBlock(thread_dim, thread_dim);
+
 	for(int k = size/2; k > 0; k = k >> 1) {
 		printf("Running kernel streams for k=%d\n", k);
 		int thread_dim = 32;
@@ -161,16 +143,9 @@ void Voronoi::compute_streaming_jfa() {
    		dim3 threadBlock(thread_dim, thread_dim);
 		for(int i = 0; i < size; i++) {
 			if(k == size/2) { // First Run
+				cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
 				cudaMalloc(&ping[i], sizeof(int *)*size*size);
             	cudaMalloc(&pong[i], sizeof(int *)*size*size);
-				cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
-				int num_seeds = 0;
-				for(int y = 0; y < size; y++) {
-					for(int x = 0; x < size; x++) {
-						if(plane[i][x + y*size] > 0) { num_seeds++; }
-					}
-				}
-				printf("For plane %d: %d\n", i, num_seeds);
 				cudaMemcpyAsync(ping[i], plane[i], sizeof(int *)*size*size, cudaMemcpyHostToDevice, streams[i]);
 				cudaMemcpyAsync(pong[i], ping[i], sizeof(int *)*size*size, cudaMemcpyDeviceToDevice, streams[i]);
 			} else {
@@ -196,20 +171,23 @@ void Voronoi::compute_streaming_jfa() {
 			}
 		}
 	}
-	//show_seeds();
+	show_seeds();
 	for(int z = 0; z < size; z++) {
-		save_slice(z, variant);
+		save_slice(z, STREAMINGJFA);
 	}
 }
 
 /* Compute Vornonoi via JFA using Ping Pong Buffers */
 void Voronoi::compute_jfa(Technique variant) {
+	int *temp_voronoi;
+	cudaMalloc(&temp_voronoi, sizeof(int *)*size*size*size);
+	cudaMemcpy(temp_voronoi, d_voronoi, sizeof(int *)*size*size*size, cudaMemcpyDeviceToDevice);
+
 	if(variant == STREAMINGJFA) {
 		compute_streaming_jfa();
 		return;
 	}
     // Set up the ping pong buffers
-    allocate_textures();
     int *ping, *pong;
     cudaMalloc(&ping, sizeof(int *)*size*size*size);
     cudaMalloc(&pong, sizeof(int *)*size*size*size);
@@ -246,10 +224,12 @@ void Voronoi::compute_jfa(Technique variant) {
     	show_seeds();
 	}
     /* Save to Dist */
-    save_raw(variant);
+    //save_raw(variant);
     for(int z = 0; z < size; z++) {
         save_slice(z, variant);
     }
+	/* Reset Vornoi Space */
+	cudaMemcpy(d_voronoi, temp_voronoi, sizeof(int *)*size*size*size, cudaMemcpyDeviceToDevice);
 }
 
 /* Seed Printing Functions */
@@ -327,22 +307,26 @@ void Voronoi::show_seeds() {
                 break;
         }
     }
-    printf("Lines: %d, Cubes: %d, Points: %d, Spheres: %d\n", line_count, cube_count, point_count, sphere_count);
+    //printf("Lines: %d, Cubes: %d, Points: %d, Spheres: %d\n", line_count, cube_count, point_count, sphere_count);
 }
 
 
 /* Runt he naive algorithm - Go through each seed iteratiely to find out the closest seed */
 void Voronoi::compute_naive() {
-	allocate_textures();
+	int *temp_voronoi;
+	cudaMalloc(&temp_voronoi, sizeof(int *)*size*size*size);
+	cudaMemcpy(temp_voronoi, d_voronoi, sizeof(int *)*size*size*size, cudaMemcpyDeviceToDevice);
 	int thread_dim = 8;
     int block_dim = cbrt((float)(size*size*size) / (float)(thread_dim*thread_dim*thread_dim));
     dim3 grid(block_dim, block_dim, block_dim);
     dim3 threadBlock(thread_dim, thread_dim, thread_dim);
-	naive_voronoi_kernel<<<grid, threadBlock>>>(d_voronoi, get_num_seeds(), size);
+	naive_voronoi_kernel<<<grid, threadBlock>>>(d_voronoi, size*size*size, size);
 	cudaMemcpy(voronoi, d_voronoi, sizeof(int *)*size*size*size, cudaMemcpyDeviceToHost);
+	show_seeds();
 	for(int z = 0; z < size; z++) {
-		save_slice(z, variant);
+		save_slice(z, NAIVE);
 	}
+	cudaMemcpy(d_voronoi, temp_voronoi, sizeof(int *)*size*size*size, cudaMemcpyDeviceToDevice);
 }
 
 string Voronoi::get_basedir(Technique variant) {
@@ -427,15 +411,18 @@ void Voronoi::save_image(unsigned char * bitmap, string basedir, int counter) {
 
 void Voronoi::compute() {
 	init();
-	if(variant == NAIVE) {
+	allocate_textures();
+	if(mode == NAIVE) {
 		compute_naive();
-	} else if (variant == ALL) {
+	} else if (mode == ALL) {
 		compute_naive();
 		compute_jfa(JFA);
 		compute_jfa(JFAONE);
 		compute_jfa(ONEJFA);
 		compute_jfa(JFATWO);
+		compute_jfa(STREAMINGJFA);
 	} else {
-		compute_jfa(variant);
+//		compute_naive();
+		compute_jfa(mode);
 	}
 }

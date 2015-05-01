@@ -13,17 +13,18 @@ __device__ void draw_line(int *, int4 *, int, int, int, int, int, int, Technique
 
 
 /* Kernel to generate generalized sites */
-__global__ void generate_seeds(int *voronoi, int *valid_cubes, int4 *seeds, int cell_size, int size, Technique variant) {
+__global__ void generate_seeds(int *voronoi, int *valid_cubes, int4 *seeds, int4 *naive_seeds, int cell_size, int size, Technique variant) {
+
 	int id = blockDim.x*blockIdx.x + threadIdx.x;
 	int num_cells = size/cell_size; /* sizeumber of cells along each axis */
 	int y_i = (id%num_cells)*cell_size;
 	int level = id/(num_cells * num_cells);
 	int z_i = (id/(num_cells * num_cells))*cell_size;
 	int x_i = ((id - num_cells*num_cells*level)/num_cells)*cell_size;
+
 	/* Generate Seed */
 	int seed_counter = valid_cubes[id];
 	if (seed_counter > -1) {
-		//voronoi[(x_i) + (y_i)*size + (z_i)*size*size] = id + 1;
 		voronoi[(x_i) + (y_i)*size + (z_i)*size*size] = seed_counter;
 
 		int finalx = x_i;
@@ -34,32 +35,38 @@ __global__ void generate_seeds(int *voronoi, int *valid_cubes, int4 *seeds, int 
 		curandState s;
 		curand_init(seed, 0, 0, &s);
 		int shape = curand_uniform(&s) * 4;
+
 		switch(shape) {
 			case 0: /* Point */
 				break;
 			case 1: /* Cuboid */
-				draw_cube(voronoi, seeds, 16, x_i, y_i, z_i, seed_counter, size, variant);
+				draw_cube(voronoi, naive_seeds, 16, x_i, y_i, z_i, seed_counter, size, variant);
 				break;
 			case 2: /* Sphere */
 				finalx += 8;
 				finaly += 8;
 				finalz += 8;
-				draw_sphere(voronoi, seeds, 7, x_i + 8, y_i + 8, z_i + 8, seed_counter, size, variant);
+				draw_sphere(voronoi, naive_seeds, 7, x_i + 8, y_i + 8, z_i + 8, seed_counter, size, variant);
 				break;
 			case 3: /* Line */
-				draw_line(voronoi, seeds, 15, x_i, y_i, z_i, seed_counter, size, variant);
+				draw_line(voronoi, naive_seeds, 15, x_i, y_i, z_i, seed_counter, size, variant);
 				break;
 		}
+
 		// We only need NAIVE for Error calculation, so we don't need the information of shape of seed
 		// For naive, we'll only need the right color for that seed
-		if(variant == NAIVE) {
-			shape = seed_counter;
-			seed_counter = x_i + y_i*size + z_i*size*size;	
+		if(1 || variant == NAIVE || variant == ALL) {
+			int seed_loc = x_i + y_i*size + z_i*size*size;
+			naive_seeds[seed_loc].w = seed_counter;
+			naive_seeds[seed_loc].x = finalx;
+			naive_seeds[seed_loc].y = finaly;
+			naive_seeds[seed_loc].z = finalz;
 		}
+		seed_counter--;
 		seeds[seed_counter].w = shape;
 	 	seeds[seed_counter].x = finalx;
-        seeds[seed_counter].y = finaly;
-        seeds[seed_counter].z = finalz;
+       	seeds[seed_counter].y = finaly;
+       	seeds[seed_counter].z = finalz;
 	}
 }
 
@@ -71,7 +78,7 @@ __device__ void draw_line(int *voronoi, int4* seeds, int l, int x, int y, int z,
 		z += 1;
 		if(x < size && y < size && z < size) {
 			voronoi[x + y*size + z*size*size] = color;
-			if(variant == NAIVE) {
+			if(1 || variant == NAIVE || variant == ALL) {
 				seeds[x + y*size + z*size*size].x = x;
 				seeds[x + y*size + z*size*size].y = y;
 				seeds[x + y*size + z*size*size].z = z;
@@ -90,7 +97,7 @@ __device__ void draw_sphere(int *voronoi, int4* seeds, int r, int posx, int posy
                 int z = _z + posz;
                 if(sqrtf(_x*_x + _y*_y + _z*_z) <= r) {
                     voronoi[x + y*size + z*size*size] = color;
-					if(variant == NAIVE) {
+					if(1 || variant == NAIVE || variant == ALL) {
                 		seeds[x + y*size + z*size*size].x = x;
                 		seeds[x + y*size + z*size*size].y = y;
                 		seeds[x + y*size + z*size*size].z = z;
@@ -108,7 +115,7 @@ __device__ void draw_cube(int *voronoi, int4* seeds, int side, int cx, int cy, i
 			for(int x = cx; x < cx + side; x++) {
 				if(x >= 0 && y >= 0 && z >= 0 && y < size && x < size && z < size) {
 					voronoi[x + y*size + z*size*size] = color;
-					if(variant == NAIVE) {
+					if(1 || variant == NAIVE || variant == ALL) {
                 		seeds[x + y*size + z*size*size].x = x;
                 		seeds[x + y*size + z*size*size].y = y;
                 		seeds[x + y*size + z*size*size].z = z;
@@ -212,8 +219,45 @@ __global__ void jfa_voronoi_kernel(int *voronoi, int *ping, int *pong, int k, in
 	} 
 }
 
+/* Planar Kernel to create Planes */
 
-/* sizeAIVE Kernel */
+//__global__ void plane_generate_kernel(int *voronoi, int *plane, int i, int size, int *Mutex) {
+__global__ void plane_generate_kernel(int *voronoi, int *plane, int i, int size) {
+	int x = threadIdx.x + blockIdx.x*blockDim.x;
+    int y = threadIdx.y + blockIdx.y*blockDim.y;
+    int z = threadIdx.z + blockIdx.z*blockDim.z;
+//	int FillCellIdx  = x + y*size;
+// 	while ( atomicCAS( Mutex , - 1 , FillCellIdx ) == FillCellIdx ) {}
+   
+	int value = voronoi[x + y*size + z*size*size];
+    if(value > 0) {
+    	int curvalue = plane[x + y*size];
+        // We found a seeed, now map it to x-y plane
+        if(curvalue == 0) {
+        	plane[x + y*size] = value;
+        } else {
+        	// Conflict!
+            // Get the closeset seed for this x-y point
+ 			int4 curseed = tex1Dfetch(tex_seeds, curvalue - 1);
+            int cx = curseed.x - x;
+            int cy = curseed.y - y;
+            int cz = curseed.z - i;
+            int4 otherseed = tex1Dfetch(tex_seeds, value - 1);
+            int ox = otherseed.x - x;
+            int oy = otherseed.y - y;
+            int oz = otherseed.z - i;
+            float cur_distance = cx*cx + cy*cy + cz*cz;
+            float other_distance = ox*ox + oy*oy + oz*oz;
+            if(cur_distance > other_distance) {
+            	plane[x + y*size] = value;
+            }
+        }
+    }
+//	atomicExch( Mutex , - 1 ) ;
+}
+
+
+/* NAIVE Kernel */
 
 __global__ void naive_voronoi_kernel(int *voronoi, int num_seeds, int size) {
 
@@ -228,10 +272,13 @@ __global__ void naive_voronoi_kernel(int *voronoi, int num_seeds, int size) {
 		float min_dist = FLT_MAX;
 		int mink = 0;
 		for(k = 0; k < num_seeds; k++) {
-			int4 curseed = tex1Dfetch(tex_seeds, k);
+			int4 curseed = tex1Dfetch(tex_naive_seeds, k);
 			_x = curseed.x;
 			_y = curseed.y;
 			_z = curseed.z;
+			if(_x == -1) {
+				continue;
+			}
 			dx = _x - x;
 			dy = _y - y;
 			dz = _z - z;
@@ -241,6 +288,6 @@ __global__ void naive_voronoi_kernel(int *voronoi, int num_seeds, int size) {
 				mink = curseed.w;
 			}
 		}
-		voronoi[(x + y*size + z*size*size)] = mink + 1;
+		voronoi[(x + y*size + z*size*size)] = mink;
 	}
 }

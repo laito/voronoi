@@ -31,7 +31,7 @@ enum Technique {
 
 class Voronoi {
 	public:
-		Voronoi(Technique variant_, int size_, int cube_size_, int num_seeds_, bool show_seeds_) : variant(variant_), size(size_), cube_size(cube_size_),  num_seeds(num_seeds_), m_show_seeds(show_seeds_) {}
+		Voronoi(Technique mode_, int size_, int cube_size_, int num_seeds_, bool show_seeds_) : mode(mode_), size(size_), cube_size(cube_size_),  num_seeds(num_seeds_), m_show_seeds(show_seeds_) {}
 		void compute();
 
 	private:
@@ -62,9 +62,11 @@ class Voronoi {
 		int *d_valid_cubes;
 
 		int4 *seeds;
+		int4 *naive_seeds;
 		int4 *d_seeds;
+		int4 *d_naive_seeds;
 		unsigned char *seed_colors;
-		Technique variant;
+		Technique mode;
         int size;
         int num_eeds;
         int cube_size;
